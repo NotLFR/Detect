@@ -1,0 +1,33 @@
+[package]
+name = "toolkit-dl"
+version = "0.1.0"
+edition = "2021"
+description = "Interactive CLI downloader for Windows forensics and sysadmin tools"
+authors = ["LFR"]
+
+[[bin]]
+name = "toolkit-dl"
+path = "src/main.rs"
+
+[dependencies]
+# TUI / terminal
+crossterm = "0.27"
+ratatui = "0.26"
+
+# HTTP downloads
+reqwest = { version = "0.12", features = ["blocking", "stream"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Progress / display
+indicatif = "0.17"
+
+# Misc utils
+anyhow = "1"
+dirs = "5"
+zip = "0.6"
