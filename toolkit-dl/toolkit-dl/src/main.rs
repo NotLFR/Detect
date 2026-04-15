@@ -119,53 +119,53 @@ fn catalogue() -> Vec<ToolCategory> {
     vec![
         ToolCategory {
             name: "detect.ac Tools",
-            icon: "🛡",
+            icon: "🔍",
             tools: vec![
                 Tool {
                     name: "USN Journal Parser",
-                    description: "Analyses the USN Journal with in-depth filtering",
+                    description: "Analyses the USN Journal, prints everything in the Journal and allows in depth filtering of the Journal, very good for in depth analysis.",
                     url: "https://github.com/detect-ac/USNJournal/releases/download/forensics/USN.Journal.exe",
                     filename: "USN.Journal.exe",
                     auto_extract: false,
                 },
                 Tool {
                     name: "Deleted BAM Keys Parser",
-                    description: "Finds deleted BAM registry keys + digital signature & entropy",
+                    description: "Analyses the registry, specifically for BAM (Background Activity Monitor) Key Deletions, and outputs found deleted, keys + if the file exists, its digital signature, and its entropy.",
                     url: "https://github.com/detect-ac/Deleted-BAM-Scanner/releases/download/forensics/Deleted.BAM.Keys.exe",
                     filename: "Deleted.BAM.Keys.exe",
                     auto_extract: false,
                 },
                 Tool {
                     name: "Windows Sqlite Database Parser",
-                    description: "Parse Win11 DBs for paths, executables, search & notepad history",
+                    description: "Analyze Windows database files for recent paths, executables, search history and notepad history. This only works on Windows 11 Machines.",
                     url: "https://github.com/detect-ac/Windows-Sqlite-DB-Parser/releases/download/forensics/Windows.Sqlite.Database.Parser.exe",
                     filename: "Windows.Sqlite.Database.Parser.exe",
                     auto_extract: false,
                 },
                 Tool {
                     name: "BAM Parser",
-                    description: "Parse BAM data for timestamps, USN mods & YARA-flagged files",
+                    description: "Parse and analyze BAM (Background Activity Moderator) data for timestamps, usn modifications and unsigned/flagged files with yara rules.",
                     url: "https://github.com/spokwn/BAM-parser/releases/download/v1.2.9/BAMParser.exe",
                     filename: "BAMParser.exe",
                     auto_extract: false,
                 },
                 Tool {
                     name: "Prefetch Parser",
-                    description: "Analyse Prefetch for unsigned/YARA-flagged files & execution timestamps",
+                    description: "Analyze Windows Prefetch files for unsigned, flagged files using yara and timestamps for execution.",
                     url: "https://github.com/spokwn/prefetch-parser/releases/download/v1.5.5/PrefetchParser.exe",
                     filename: "PrefetchParser.exe",
                     auto_extract: false,
                 },
                 Tool {
                     name: "PcaSvc Executed",
-                    description: "Track PCA Service executions, flag unsigned & YARA-matched files",
+                    description: "Track and analyze Program Compatibility Assistant Service executions and flag unsigned files, and flagged files using yara rules.",
                     url: "https://github.com/spokwn/pcasvc-executed/releases/download/v0.8.6/PcaSvcExecuted.exe",
                     filename: "PcaSvcExecuted.exe",
                     auto_extract: false,
                 },
                 Tool {
                     name: "Process Parser",
-                    description: "Analyse AppInfo & Diagtrack for YARA-flagged files in one pass",
+                    description: "Analyze AppInfo and Diagtrack for flagged files with yara rules, all in instance.",
                     url: "https://github.com/spokwn/process-parser/releases/download/v0.5.5/ProcessParser.exe",
                     filename: "ProcessParser.exe",
                     auto_extract: false,
@@ -174,7 +174,7 @@ fn catalogue() -> Vec<ToolCategory> {
         },
         ToolCategory {
             name: "Forensics & Analysis",
-            icon: "🔍",
+            icon: "🕵️",
             tools: vec![
                 Tool {
                     name: "WinPrefetchView",
@@ -184,9 +184,9 @@ fn catalogue() -> Vec<ToolCategory> {
                     auto_extract: true,
                 },
                 Tool {
-                    name: "System Informer (Process Hacker 3)",
+                    name: "System Informer",
                     description: "Advanced process, memory & network monitor",
-                    url: "https://github.com/winsiderss/systeminformer/releases/download/3.0.7895/systeminformer-3.0.7895-setup.exe",
+                    url: "https://sourceforge.net/projects/systeminformer/files/systeminformer-3.2.25011-release-setup.exe/download",
                     filename: "systeminformer-setup.exe",
                     auto_extract: false,
                 },
@@ -205,11 +205,11 @@ fn catalogue() -> Vec<ToolCategory> {
                     auto_extract: true,
                 },
                 Tool {
-                    name: "Volatility3",
-                    description: "Memory forensics framework (standalone Win EXE)",
-                    url: "https://github.com/volatilityfoundation/volatility3/releases/latest/download/volatility3.exe",
-                    filename: "volatility3.exe",
-                    auto_extract: false,
+                    name: "Hayabusa 🏍️",
+                    description: "Windows Event Log forensics timeline generator",
+                    url: "https://github.com/Yamato-Security/hayabusa/releases/download/v3.8.1/hayabusa-3.8.1-win-x64.zip",
+                    filename: "hayabusa-3.8.1-win-x64.zip",
+                    auto_extract: true,
                 },
             ],
         },
@@ -369,7 +369,7 @@ impl App {
 
         let output_dir = dirs::download_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("toolkit-dl");
+            .join("elementary");
 
         App {
             screen: Screen::CategoryList,
@@ -459,28 +459,27 @@ fn render(f: &mut Frame, app: &App) {
 
     // Animated title — scrolling shimmer on the header text
     let t = app.anim.t();
-    let shimmer_pos = ((t * 8.0) as usize) % 40;
-    let title_base = " ⬇  toolkit-dl — Windows Tool Downloader ";
+    let shimmer_pos = ((t * 8.0) as usize) % 60;
+    let title_base = r#" ⬇  Elementary — "Elementary, my dear Watson"  ⬇ "#;
     let title_chars: Vec<char> = title_base.chars().collect();
     let title_spans: Vec<Span> = title_chars.iter().enumerate().map(|(i, &c)| {
-        let dist = ((i as i32 - shimmer_pos as i32).abs()) as usize;
-        let style = if dist == 0 {
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-        } else if dist <= 2 {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)
-        };
-        Span::styled(c.to_string(), style)
-    }).collect();
+    let dist = ((i as i32 - shimmer_pos as i32).abs()) as usize;
+    let style = if dist == 0 {
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+    } else if dist <= 2 {
+        Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+    };
+    Span::styled(c.to_string(), style)
+}).collect();
 
-    // Outer border breathes between dark gray and the animated color
     let border_p = app.anim.pulse(4.0);
-    let outer_border = Color::Rgb(
-        (30.0 + border_p * 20.0) as u8,
-        (30.0 + border_p * 30.0) as u8,
-        (50.0 + border_p * 40.0) as u8,
-    );
+let outer_border = Color::Rgb(
+    (10.0 + border_p * 10.0) as u8,  //R
+    (50.0 + border_p * 150.0) as u8,  //G
+    (10.0 + border_p * 20.0) as u8,   //B
+);
 
     let outer = Block::default()
         .title(Line::from(title_spans))
@@ -548,11 +547,11 @@ fn render_category(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     .border_style(Style::default().fg(active_border)),
             )
             .highlight_style(
-                Style::default()
-                    .bg(Color::Rgb(20, 60, 120))
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )
+    Style::default()
+        .bg(Color::Rgb(144, 238, 144)) 
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD),
+)
             .highlight_symbol(cursor),
         chunks[0],
         &mut state,
@@ -644,7 +643,7 @@ fn render_tools(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         &mut state,
     );
 
-    render_help(f, chunks[1], &[("↑↓","navigate"),("Space","toggle"),("A","toggle all"),("Esc","back"),("D","download")]);
+    render_help(f, chunks[1], &[("↑↓","Navigate"),("Space","Toggle"),("A","Toggle (a)ll"),("Esc","Back"),("D","(D)ownload")]);
 }
 
 fn render_confirm(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -669,13 +668,13 @@ fn render_confirm(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("  Output: ", Style::default().fg(Color::DarkGray)),
+        Span::styled("  Output: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         Span::styled(app.output_dir.display().to_string(), Style::default().fg(Color::Yellow)),
     ]));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  Enter = confirm   Esc = back",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     )));
 
     f.render_widget(
@@ -797,12 +796,12 @@ fn run_downloads_plaintext(app: &App) -> Result<()> {
 
     let client = Client::builder()
         .timeout(Duration::from_secs(300))
-        .user_agent("toolkit-dl/0.1")
+        .user_agent("Elementary/0.1")
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()?;
 
     let selected = app.selected_tool_list();
-    println!("\n  toolkit-dl — {} download(s)\n", selected.len());
+    println!("\n  Elementary — {} download(s)\n", selected.len());
     println!("  Output → {}\n", app.output_dir.display());
 
     for (i, (c, t)) in selected.iter().enumerate() {
@@ -816,7 +815,7 @@ fn run_downloads_plaintext(app: &App) -> Result<()> {
         pb.set_style(
             ProgressStyle::with_template("{spinner:.cyan} {bytes} @ {bytes_per_sec}")
                 .unwrap()
-                .tick_strings(&["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]),
+                .tick_strings(&["[    ]", "[=   ]", "[==  ]", "[=== ]", "[====]", "[ ===]", "[  ==]", "[   =]"])
         );
         pb.enable_steady_tick(Duration::from_millis(80));
 
@@ -861,14 +860,14 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new();
 
-    // Target ~60fps for smooth animations
+    
     let frame_duration = Duration::from_millis(16);
 
     loop {
         terminal.draw(|f| render(f, &app))?;
         app.anim.clear_expired_flash();
 
-        // Poll for input with short timeout so animations keep ticking
+        
         if event::poll(frame_duration)? {
             let Event::Key(key) = event::read()? else { continue; };
             if key.kind != crossterm::event::KeyEventKind::Press { continue; }
