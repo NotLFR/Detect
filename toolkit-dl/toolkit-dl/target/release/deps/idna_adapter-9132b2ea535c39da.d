@@ -1,0 +1,7 @@
+C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\deps\idna_adapter-9132b2ea535c39da.d: C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\idna_adapter-1.2.1\src\lib.rs
+
+C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\deps\libidna_adapter-9132b2ea535c39da.rlib: C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\idna_adapter-1.2.1\src\lib.rs
+
+C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\deps\libidna_adapter-9132b2ea535c39da.rmeta: C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\idna_adapter-1.2.1\src\lib.rs
+
+C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\idna_adapter-1.2.1\src\lib.rs:

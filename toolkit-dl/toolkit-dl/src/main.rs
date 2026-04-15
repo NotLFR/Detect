@@ -3,7 +3,7 @@ use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -24,6 +24,79 @@ use ratatui::{
 use reqwest::blocking::Client;
 use zip::ZipArchive;
 
+// ─── Animation state ──────────────────────────────────────────────────────────
+
+struct Anim {
+    start: Instant,
+    /// When Some, a tool was just toggled: (cat, tool, selected, until)
+    flash: Option<(usize, usize, bool, Instant)>,
+    /// Last navigation direction for cursor trail: -1 up, 1 down, 0 none
+    nav_dir: i8,
+    nav_at: Instant,
+}
+
+impl Anim {
+    fn new() -> Self {
+        Anim {
+            start: Instant::now(),
+            flash: None,
+            nav_dir: 0,
+            nav_at: Instant::now(),
+        }
+    }
+
+    fn t(&self) -> f64 {
+        self.start.elapsed().as_secs_f64()
+    }
+
+    /// 0.0..=1.0 smooth sine pulse, period = `period_s` seconds
+    fn pulse(&self, period_s: f64) -> f64 {
+        (self.t() * std::f64::consts::TAU / period_s).sin() * 0.5 + 0.5
+    }
+
+    /// Breathing border color for the active panel
+    fn border_color(&self) -> Color {
+        let p = self.pulse(2.5);
+        let r = (0.0 + p * 80.0) as u8;
+        let g = (100.0 + p * 100.0) as u8;
+        let b = (200.0 + p * 55.0) as u8;
+        Color::Rgb(r, g, b)
+    }
+
+    /// Animated cursor symbol — cycles through a "glow" sequence
+    fn cursor_symbol(&self) -> &'static str {
+        let frames = ["▶ ", "► ", "▷ ", "► "];
+        let idx = ((self.t() * 4.0) as usize) % frames.len();
+        frames[idx]
+    }
+
+    /// Nav trail color — briefly highlights the row we just came from
+    fn nav_trail_age(&self) -> f64 {
+        self.nav_at.elapsed().as_secs_f64()
+    }
+
+    fn set_flash(&mut self, cat: usize, tool: usize, selected: bool) {
+        self.flash = Some((cat, tool, selected, Instant::now() + Duration::from_millis(300)));
+    }
+
+    fn flash_active(&self, cat: usize, tool: usize) -> Option<bool> {
+        if let Some((fc, ft, sel, until)) = self.flash {
+            if fc == cat && ft == tool && Instant::now() < until {
+                return Some(sel);
+            }
+        }
+        None
+    }
+
+    fn clear_expired_flash(&mut self) {
+        if let Some((_, _, _, until)) = self.flash {
+            if Instant::now() >= until {
+                self.flash = None;
+            }
+        }
+    }
+}
+
 // ─── Tool catalogue ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -39,13 +112,11 @@ struct Tool {
     description: &'static str,
     url: &'static str,
     filename: &'static str,
-    /// Auto-extract if this is a .zip file after download
     auto_extract: bool,
 }
 
 fn catalogue() -> Vec<ToolCategory> {
     vec![
-        // ── detect.ac tools ────────────────────────────────────────────────
         ToolCategory {
             name: "detect.ac Tools",
             icon: "🛡",
@@ -101,7 +172,6 @@ fn catalogue() -> Vec<ToolCategory> {
                 },
             ],
         },
-        // ── Classic forensics ──────────────────────────────────────────────
         ToolCategory {
             name: "Forensics & Analysis",
             icon: "🔍",
@@ -143,7 +213,6 @@ fn catalogue() -> Vec<ToolCategory> {
                 },
             ],
         },
-        // ── Network ────────────────────────────────────────────────────────
         ToolCategory {
             name: "Network Tools",
             icon: "🌐",
@@ -178,7 +247,6 @@ fn catalogue() -> Vec<ToolCategory> {
                 },
             ],
         },
-        // ── Disk & File ────────────────────────────────────────────────────
         ToolCategory {
             name: "Disk & File",
             icon: "💾",
@@ -213,7 +281,6 @@ fn catalogue() -> Vec<ToolCategory> {
                 },
             ],
         },
-        // ── Registry & System ──────────────────────────────────────────────
         ToolCategory {
             name: "Registry & System",
             icon: "🔧",
@@ -241,7 +308,6 @@ fn catalogue() -> Vec<ToolCategory> {
                 },
             ],
         },
-        // ── Password & Credentials ─────────────────────────────────────────
         ToolCategory {
             name: "Password & Credentials",
             icon: "🔑",
@@ -291,6 +357,7 @@ struct App {
     selected_tools: HashSet<String>,
     output_dir: PathBuf,
     log: Vec<String>,
+    anim: Anim,
 }
 
 impl App {
@@ -312,21 +379,26 @@ impl App {
             selected_tools: HashSet::new(),
             output_dir,
             log: Vec::new(),
+            anim: Anim::new(),
         }
     }
 
     fn current_cat_idx(&self) -> usize { self.cat_state.selected().unwrap_or(0) }
     fn current_tool_idx(&self) -> usize { self.tool_state.selected().unwrap_or(0) }
-
     fn tool_key(cat: usize, tool: usize) -> String { format!("{cat}:{tool}") }
 
     fn toggle_tool(&mut self) {
-        let key = Self::tool_key(self.current_cat_idx(), self.current_tool_idx());
-        if self.selected_tools.contains(&key) {
+        let cat = self.current_cat_idx();
+        let tool = self.current_tool_idx();
+        let key = Self::tool_key(cat, tool);
+        let selected = if self.selected_tools.contains(&key) {
             self.selected_tools.remove(&key);
+            false
         } else {
             self.selected_tools.insert(key);
-        }
+            true
+        };
+        self.anim.set_flash(cat, tool, selected);
     }
 
     fn select_all_in_category(&mut self) {
@@ -352,29 +424,79 @@ impl App {
         out.sort();
         out
     }
+
+    fn nav_up_cat(&mut self) {
+        let i = self.cat_state.selected().unwrap_or(0);
+        self.cat_state.select(Some(i.saturating_sub(1)));
+        self.anim.nav_dir = -1;
+        self.anim.nav_at = Instant::now();
+    }
+    fn nav_down_cat(&mut self) {
+        let i = self.cat_state.selected().unwrap_or(0);
+        self.cat_state.select(Some((i + 1).min(self.categories.len() - 1)));
+        self.anim.nav_dir = 1;
+        self.anim.nav_at = Instant::now();
+    }
+    fn nav_up_tool(&mut self) {
+        let i = self.tool_state.selected().unwrap_or(0);
+        self.tool_state.select(Some(i.saturating_sub(1)));
+        self.anim.nav_dir = -1;
+        self.anim.nav_at = Instant::now();
+    }
+    fn nav_down_tool(&mut self) {
+        let i = self.tool_state.selected().unwrap_or(0);
+        let max = self.categories[self.current_cat_idx()].tools.len() - 1;
+        self.tool_state.select(Some((i + 1).min(max)));
+        self.anim.nav_dir = 1;
+        self.anim.nav_at = Instant::now();
+    }
 }
 
 // ─── UI ───────────────────────────────────────────────────────────────────────
 
 fn render(f: &mut Frame, app: &App) {
-    let area = f.area();
+    let area = f.size();
+
+    // Animated title — scrolling shimmer on the header text
+    let t = app.anim.t();
+    let shimmer_pos = ((t * 8.0) as usize) % 40;
+    let title_base = " ⬇  toolkit-dl — Windows Tool Downloader ";
+    let title_chars: Vec<char> = title_base.chars().collect();
+    let title_spans: Vec<Span> = title_chars.iter().enumerate().map(|(i, &c)| {
+        let dist = ((i as i32 - shimmer_pos as i32).abs()) as usize;
+        let style = if dist == 0 {
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+        } else if dist <= 2 {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)
+        };
+        Span::styled(c.to_string(), style)
+    }).collect();
+
+    // Outer border breathes between dark gray and the animated color
+    let border_p = app.anim.pulse(4.0);
+    let outer_border = Color::Rgb(
+        (30.0 + border_p * 20.0) as u8,
+        (30.0 + border_p * 30.0) as u8,
+        (50.0 + border_p * 40.0) as u8,
+    );
+
     let outer = Block::default()
-        .title(Span::styled(
-            " ⬇  toolkit-dl — Windows Tool Downloader ",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-        ))
+        .title(Line::from(title_spans))
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(outer_border));
+
     let inner = outer.inner(area);
     f.render_widget(outer, area);
 
     match app.screen {
         Screen::CategoryList => render_category(f, app, inner),
-        Screen::ToolList    => render_tools(f, app, inner),
-        Screen::Confirm     => render_confirm(f, app, inner),
-        _                   => render_log(f, app, inner),
+        Screen::ToolList     => render_tools(f, app, inner),
+        Screen::Confirm      => render_confirm(f, app, inner),
+        _                    => render_log(f, app, inner),
     }
 }
 
@@ -384,12 +506,32 @@ fn render_category(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .constraints([Constraint::Min(3), Constraint::Length(3)])
         .split(area);
 
+    let cursor = app.anim.cursor_symbol();
+    let active_border = app.anim.border_color();
+    let trail_age = app.anim.nav_trail_age();
+    let cur = app.current_cat_idx();
+
     let items: Vec<ListItem> = app.categories.iter().enumerate().map(|(i, cat)| {
-        let sel = (0..cat.tools.len()).filter(|&t| app.selected_tools.contains(&App::tool_key(i, t))).count();
-        let badge = if sel > 0 { format!(" [{}✓]", sel) } else { String::new() };
+        let sel_count = (0..cat.tools.len())
+            .filter(|&t| app.selected_tools.contains(&App::tool_key(i, t)))
+            .count();
+        let badge = if sel_count > 0 { format!(" [{}✓]", sel_count) } else { String::new() };
+
+        // Nav trail: row just left gets a brief dim highlight
+        let is_trail = trail_age < 0.18 && i != cur && (
+            (app.anim.nav_dir == 1 && i + 1 == cur) ||
+            (app.anim.nav_dir == -1 && i == cur + 1)
+        );
+
+        let name_style = if is_trail {
+            Style::default().fg(Color::Rgb(140, 180, 220)).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+
         ListItem::new(Line::from(vec![
             Span::raw(format!("  {} ", cat.icon)),
-            Span::styled(cat.name, Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(cat.name, name_style),
             Span::styled(badge, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::styled(format!("  ({} tools)", cat.tools.len()), Style::default().fg(Color::DarkGray)),
         ]))
@@ -398,54 +540,122 @@ fn render_category(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let mut state = app.cat_state.clone();
     f.render_stateful_widget(
         List::new(items)
-            .block(Block::default().title(" Categories ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Blue)))
-            .highlight_style(Style::default().bg(Color::Blue).fg(Color::White).add_modifier(Modifier::BOLD))
-            .highlight_symbol("▶ "),
+            .block(
+                Block::default()
+                    .title(" Categories ")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(active_border)),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Rgb(20, 60, 120))
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(cursor),
         chunks[0],
         &mut state,
     );
+
     render_help(f, chunks[1], &[("↑↓","navigate"),("Enter","open"),("D","download"),("Q","quit")]);
 }
 
 fn render_tools(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let cat = &app.categories[app.current_cat_idx()];
+    let cat_idx = app.current_cat_idx();
+    let cat = &app.categories[cat_idx];
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(3)])
         .split(area);
 
+    let cursor = app.anim.cursor_symbol();
+    let active_border = app.anim.border_color();
+    let trail_age = app.anim.nav_trail_age();
+    let cur = app.current_tool_idx();
+
     let items: Vec<ListItem> = cat.tools.iter().enumerate().map(|(t, tool)| {
-        let checked = if app.selected_tools.contains(&App::tool_key(app.current_cat_idx(), t)) {
-            Span::styled("  [✓] ", Style::default().fg(Color::Green))
+        let key = App::tool_key(cat_idx, t);
+        let is_selected = app.selected_tools.contains(&key);
+
+        // Flash animation on toggle
+        let (checkbox_span, row_bg) = if let Some(just_selected) = app.anim.flash_active(cat_idx, t) {
+            let flash_color = if just_selected {
+                Color::Rgb(0, 220, 100)
+            } else {
+                Color::Rgb(220, 60, 60)
+            };
+            let cb = if just_selected { "  [✓] " } else { "  [ ] " };
+            (Span::styled(cb, Style::default().fg(flash_color).add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK)),
+             Some(Color::Rgb(20, 30, 20)))
+        } else if is_selected {
+            (Span::styled("  [✓] ", Style::default().fg(Color::Green)), None)
         } else {
-            Span::styled("  [ ] ", Style::default().fg(Color::DarkGray))
+            (Span::styled("  [ ] ", Style::default().fg(Color::DarkGray)), None)
         };
+
+        // Nav trail on tool rows
+        let is_trail = trail_age < 0.18 && t != cur && (
+            (app.anim.nav_dir == 1 && t + 1 == cur) ||
+            (app.anim.nav_dir == -1 && t == cur + 1)
+        );
+
+        let name_style = if is_trail {
+            Style::default().fg(Color::Rgb(140, 180, 220)).add_modifier(Modifier::BOLD)
+        } else if let Some(bg) = row_bg {
+            Style::default().bg(bg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+
         let ext_tag = if tool.auto_extract {
             Span::styled(" [auto-extract]", Style::default().fg(Color::Rgb(120, 120, 220)))
-        } else { Span::raw("") };
+        } else {
+            Span::raw("")
+        };
 
         ListItem::new(vec![
-            Line::from(vec![checked, Span::styled(tool.name, Style::default().add_modifier(Modifier::BOLD)), ext_tag]),
-            Line::from(Span::styled(format!("       {}", tool.description), Style::default().fg(Color::DarkGray))),
+            Line::from(vec![checkbox_span, Span::styled(tool.name, name_style), ext_tag]),
+            Line::from(Span::styled(
+                format!("       {}", tool.description),
+                Style::default().fg(Color::DarkGray),
+            )),
         ])
     }).collect();
 
     let mut state = app.tool_state.clone();
     f.render_stateful_widget(
         List::new(items)
-            .block(Block::default().title(format!(" {} {} ", cat.icon, cat.name)).borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Magenta)))
-            .highlight_style(Style::default().bg(Color::Rgb(40,20,60)).fg(Color::White).add_modifier(Modifier::BOLD))
-            .highlight_symbol("▶ "),
+            .block(
+                Block::default()
+                    .title(format!(" {} {} ", cat.icon, cat.name))
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(active_border)),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Rgb(40, 20, 80))
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(cursor),
         chunks[0],
         &mut state,
     );
+
     render_help(f, chunks[1], &[("↑↓","navigate"),("Space","toggle"),("A","toggle all"),("Esc","back"),("D","download")]);
 }
 
 fn render_confirm(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let selected = app.selected_tool_list();
+    let active_border = app.anim.border_color();
+
     let mut lines = vec![
-        Line::from(Span::styled("The following tools will be downloaded:", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "The following tools will be downloaded:",
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        )),
         Line::from(""),
     ];
     for (c, t) in &selected {
@@ -454,7 +664,7 @@ fn render_confirm(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         lines.push(Line::from(vec![
             Span::styled("  ✓ ", Style::default().fg(Color::Green)),
             Span::styled(tool.name, Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(note, Style::default().fg(Color::Rgb(120,120,220))),
+            Span::styled(note, Style::default().fg(Color::Rgb(120, 120, 220))),
         ]));
     }
     lines.push(Line::from(""));
@@ -463,11 +673,20 @@ fn render_confirm(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Span::styled(app.output_dir.display().to_string(), Style::default().fg(Color::Yellow)),
     ]));
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("  Enter = confirm   Esc = back", Style::default().fg(Color::DarkGray))));
+    lines.push(Line::from(Span::styled(
+        "  Enter = confirm   Esc = back",
+        Style::default().fg(Color::DarkGray),
+    )));
 
     f.render_widget(
         Paragraph::new(lines)
-            .block(Block::default().title(" Confirm Downloads ").borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(Color::Yellow)))
+            .block(
+                Block::default()
+                    .title(" Confirm Downloads ")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(active_border)),
+            )
             .wrap(Wrap { trim: false }),
         area,
     );
@@ -475,7 +694,11 @@ fn render_confirm(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
 fn render_log(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let title = if app.screen == Screen::Done { " ✓ Complete " } else { " Downloading… " };
-    let border_color = if app.screen == Screen::Done { Color::Green } else { Color::Yellow };
+    let border_color = if app.screen == Screen::Done {
+        Color::Green
+    } else {
+        app.anim.border_color()
+    };
 
     let lines: Vec<Line> = app.log.iter().map(|l| {
         let color = if l.contains('✓') { Color::Green }
@@ -487,7 +710,13 @@ fn render_log(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     f.render_widget(
         Paragraph::new(lines)
-            .block(Block::default().title(title).borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(border_color)))
+            .block(
+                Block::default()
+                    .title(title)
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(border_color)),
+            )
             .wrap(Wrap { trim: false }),
         area,
     );
@@ -496,12 +725,23 @@ fn render_log(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 fn render_help(f: &mut Frame, area: ratatui::layout::Rect, keys: &[(&str, &str)]) {
     let mut spans = vec![Span::raw("  ")];
     for (key, desc) in keys {
-        spans.push(Span::styled(format!(" {key} "), Style::default().fg(Color::Black).bg(Color::DarkGray).add_modifier(Modifier::BOLD)));
-        spans.push(Span::styled(format!(" {desc}  "), Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            format!(" {key} "),
+            Style::default().fg(Color::Black).bg(Color::DarkGray).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            format!(" {desc}  "),
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     f.render_widget(
         Paragraph::new(Line::from(spans))
-            .block(Block::default().borders(Borders::ALL).border_type(BorderType::Rounded).border_style(Style::default().fg(Color::DarkGray))),
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            ),
         area,
     );
 }
@@ -529,7 +769,6 @@ fn download_file(client: &Client, url: &str, dest: &Path) -> Result<u64> {
     Ok(buf.len() as u64)
 }
 
-/// Extracts a ZIP into `<output_dir>/<zip_stem>/`, returns file count.
 fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<usize> {
     let stem = zip_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let extract_dir = output_dir.join(&stem);
@@ -622,47 +861,60 @@ fn main() -> Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new();
 
+    // Target ~60fps for smooth animations
+    let frame_duration = Duration::from_millis(16);
+
     loop {
         terminal.draw(|f| render(f, &app))?;
+        app.anim.clear_expired_flash();
 
-        if !event::poll(Duration::from_millis(100))? { continue; }
-        let Event::Key(key) = event::read()? else { continue; };
+        // Poll for input with short timeout so animations keep ticking
+        if event::poll(frame_duration)? {
+            let Event::Key(key) = event::read()? else { continue; };
+            if key.kind != crossterm::event::KeyEventKind::Press { continue; }
 
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) { break; }
-        if matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
-            && matches!(app.screen, Screen::Done | Screen::CategoryList) { break; }
+            if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) { break; }
+            if matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
+                && matches!(app.screen, Screen::Done | Screen::CategoryList) { break; }
 
-        match app.screen {
-            Screen::CategoryList => match key.code {
-                KeyCode::Up    => { let i = app.cat_state.selected().unwrap_or(0); app.cat_state.select(Some(i.saturating_sub(1))); }
-                KeyCode::Down  => { let i = app.cat_state.selected().unwrap_or(0); app.cat_state.select(Some((i+1).min(app.categories.len()-1))); }
-                KeyCode::Enter => { app.tool_state.select(Some(0)); app.screen = Screen::ToolList; }
-                KeyCode::Char('d') | KeyCode::Char('D') => { if !app.selected_tools.is_empty() { app.screen = Screen::Confirm; } }
+            match app.screen {
+                Screen::CategoryList => match key.code {
+                    KeyCode::Up    => app.nav_up_cat(),
+                    KeyCode::Down  => app.nav_down_cat(),
+                    KeyCode::Enter => { app.tool_state.select(Some(0)); app.screen = Screen::ToolList; }
+                    KeyCode::Char('d') | KeyCode::Char('D') => {
+                        if !app.selected_tools.is_empty() { app.screen = Screen::Confirm; }
+                    }
+                    _ => {}
+                },
+                Screen::ToolList => match key.code {
+                    KeyCode::Up    => app.nav_up_tool(),
+                    KeyCode::Down  => app.nav_down_tool(),
+                    KeyCode::Char(' ')                       => app.toggle_tool(),
+                    KeyCode::Char('a') | KeyCode::Char('A') => app.select_all_in_category(),
+                    KeyCode::Esc | KeyCode::Char('b') | KeyCode::Char('B') => {
+                        app.screen = Screen::CategoryList;
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('D') => {
+                        if !app.selected_tools.is_empty() { app.screen = Screen::Confirm; }
+                    }
+                    _ => {}
+                },
+                Screen::Confirm => match key.code {
+                    KeyCode::Enter => {
+                        app.screen = Screen::Downloading;
+                        terminal.draw(|f| render(f, &app))?;
+                        disable_raw_mode()?;
+                        execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+                        terminal.show_cursor()?;
+                        run_downloads_plaintext(&app)?;
+                        return Ok(());
+                    }
+                    KeyCode::Esc => app.screen = Screen::ToolList,
+                    _ => {}
+                },
                 _ => {}
-            },
-            Screen::ToolList => match key.code {
-                KeyCode::Up    => { let i = app.tool_state.selected().unwrap_or(0); app.tool_state.select(Some(i.saturating_sub(1))); }
-                KeyCode::Down  => { let i = app.tool_state.selected().unwrap_or(0); let max = app.categories[app.current_cat_idx()].tools.len()-1; app.tool_state.select(Some((i+1).min(max))); }
-                KeyCode::Char(' ')             => app.toggle_tool(),
-                KeyCode::Char('a') | KeyCode::Char('A') => app.select_all_in_category(),
-                KeyCode::Esc | KeyCode::Char('b') | KeyCode::Char('B') => app.screen = Screen::CategoryList,
-                KeyCode::Char('d') | KeyCode::Char('D') => { if !app.selected_tools.is_empty() { app.screen = Screen::Confirm; } }
-                _ => {}
-            },
-            Screen::Confirm => match key.code {
-                KeyCode::Enter => {
-                    app.screen = Screen::Downloading;
-                    terminal.draw(|f| render(f, &app))?;
-                    disable_raw_mode()?;
-                    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
-                    terminal.show_cursor()?;
-                    run_downloads_plaintext(&app)?;
-                    return Ok(());
-                }
-                KeyCode::Esc => app.screen = Screen::ToolList,
-                _ => {}
-            },
-            _ => {}
+            }
         }
     }
 

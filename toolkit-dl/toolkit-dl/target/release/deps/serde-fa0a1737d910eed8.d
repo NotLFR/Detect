@@ -1,0 +1,14 @@
+C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\deps\serde-fa0a1737d910eed8.d: C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\build\serde-cf39a1f6442d61c3\out/private.rs
+
+C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\deps\libserde-fa0a1737d910eed8.rlib: C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\build\serde-cf39a1f6442d61c3\out/private.rs
+
+C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\deps\libserde-fa0a1737d910eed8.rmeta: C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\build\serde-cf39a1f6442d61c3\out/private.rs
+
+C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\oconn\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+C:\Users\oconn\Desktop\Detect\Detect\toolkit-dl\toolkit-dl\target\release\build\serde-cf39a1f6442d61c3\out/private.rs:
+
+# env-dep:OUT_DIR=C:\\Users\\oconn\\Desktop\\Detect\\Detect\\toolkit-dl\\toolkit-dl\\target\\release\\build\\serde-cf39a1f6442d61c3\\out
