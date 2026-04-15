@@ -1,12 +1,8 @@
 # Elementary
 ## "Elementary, ny dear Watson" Sherlock Holmes
 
-A terminal-based interactive downloader for Windows forensics, sysadmin, and security tools written in Rust 🦀
+A TUI downloader for Windows Forensics & Security tools written in Rust 🦀
 
-## Features
-
-- Fully interactive TUI
-- Organised into tool categories with multi-select
 
 
 ## Build
