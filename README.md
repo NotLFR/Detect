@@ -1,4 +1,4 @@
-# "Elementary, ny dear Watson" - Sherlock Holmes
+# "Elementary, my dear Watson" - Sherlock Holmes
 
 A TUI downloader for Windows Forensics & Security tools written in Rust 🦀
 
