@@ -9,7 +9,7 @@ A TUI downloader for Windows Forensics & Security tools written in Rust 🦀
 Requirements: [Rust toolchain](https://rustup.rs/) (stable, 1.75+)
 
 ```bash
-git clone https://github.com/NotLFR/Detect
+git clone https://github.com/NotLFR/Sherlock
 cd elementary
 cargo build --release
 ```
