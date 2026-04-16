@@ -1,11 +1,12 @@
 use std::{
     collections::HashSet,
+    env,
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
-
+ 
 use anyhow::{Context, Result};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -22,10 +23,11 @@ use ratatui::{
     Frame, Terminal,
 };
 use reqwest::blocking::Client;
+use serde::Deserialize;
 use zip::ZipArchive;
-
+ 
 // ─── Animation state ──────────────────────────────────────────────────────────
-
+ 
 struct Anim {
     start: Instant,
     /// When Some, a tool was just toggled: (cat, tool, selected, until)
@@ -34,7 +36,7 @@ struct Anim {
     nav_dir: i8,
     nav_at: Instant,
 }
-
+ 
 impl Anim {
     fn new() -> Self {
         Anim {
@@ -44,16 +46,16 @@ impl Anim {
             nav_at: Instant::now(),
         }
     }
-
+ 
     fn t(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
     }
-
+ 
     /// 0.0..=1.0 smooth sine pulse, period = `period_s` seconds
     fn pulse(&self, period_s: f64) -> f64 {
         (self.t() * std::f64::consts::TAU / period_s).sin() * 0.5 + 0.5
     }
-
+ 
     /// Breathing border color for the active panel
     fn border_color(&self) -> Color {
         let p = self.pulse(2.5);
@@ -62,23 +64,23 @@ impl Anim {
         let b = (200.0 + p * 55.0) as u8;
         Color::Rgb(r, g, b)
     }
-
+ 
     /// Animated cursor symbol — cycles through a "glow" sequence
     fn cursor_symbol(&self) -> &'static str {
         let frames = ["▶ ", "► ", "▷ ", "► "];
         let idx = ((self.t() * 4.0) as usize) % frames.len();
         frames[idx]
     }
-
+ 
     /// Nav trail color — briefly highlights the row we just came from
     fn nav_trail_age(&self) -> f64 {
         self.nav_at.elapsed().as_secs_f64()
     }
-
+ 
     fn set_flash(&mut self, cat: usize, tool: usize, selected: bool) {
         self.flash = Some((cat, tool, selected, Instant::now() + Duration::from_millis(300)));
     }
-
+ 
     fn flash_active(&self, cat: usize, tool: usize) -> Option<bool> {
         if let Some((fc, ft, sel, until)) = self.flash {
             if fc == cat && ft == tool && Instant::now() < until {
@@ -87,7 +89,7 @@ impl Anim {
         }
         None
     }
-
+ 
     fn clear_expired_flash(&mut self) {
         if let Some((_, _, _, until)) = self.flash {
             if Instant::now() >= until {
@@ -96,250 +98,285 @@ impl Anim {
         }
     }
 }
-
+ 
 // ─── Tool catalogue ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
+ 
+#[derive(Debug, Clone, Deserialize)]
 struct ToolCategory {
-    name: &'static str,
-    icon: &'static str,
+    name: String,
+    icon: String,
+    #[serde(default, rename = "tools")]
     tools: Vec<Tool>,
 }
-
-#[derive(Debug, Clone)]
+ 
+#[derive(Debug, Clone, Deserialize)]
 struct Tool {
-    name: &'static str,
-    description: &'static str,
-    url: &'static str,
-    filename: &'static str,
+    name: String,
+    description: String,
+    url: String,
+    filename: String,
+    #[serde(default)]
     auto_extract: bool,
 }
-
-fn catalogue() -> Vec<ToolCategory> {
+ 
+/// Top-level shape of catalogue.toml
+#[derive(Debug, Deserialize)]
+struct CatalogueFile {
+    category: Vec<ToolCategory>,
+}
+ 
+/// Load catalogue from catalogue.toml next to the binary, or fall back to built-in.
+fn load_catalogue() -> Vec<ToolCategory> {
+    // Look next to the executable first, then cwd.
+    let search_paths: Vec<PathBuf> = [
+        env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("catalogue.toml"))),
+        Some(PathBuf::from("catalogue.toml")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+ 
+    for path in &search_paths {
+        if path.exists() {
+            match fs::read_to_string(path) {
+                Ok(text) => match toml::from_str::<CatalogueFile>(&text) {
+                    Ok(cf) => return cf.category,
+                    Err(e) => eprintln!("Warning: catalogue.toml parse error: {e}"),
+                },
+                Err(e) => eprintln!("Warning: could not read {}: {e}", path.display()),
+            }
+        }
+    }
+ 
+    // ── Built-in fallback (mirrors the original hardcoded list) ───────────────
+    fn catalogue() -> Vec<ToolCategory> {
     vec![
         ToolCategory {
-            name: "detect.ac Tools",
-            icon: "🔍",
+            name: "detect.ac Tools".to_string(),
+            icon: "🔍".to_string(),
             tools: vec![
                 Tool {
-                    name: "USN Journal Parser",
-                    description: "Analyses the USN Journal, prints everything in the Journal and allows in depth filtering of the Journal, very good for in depth analysis.",
-                    url: "https://github.com/detect-ac/USNJournal/releases/download/forensics/USN.Journal.exe",
-                    filename: "USN.Journal.exe",
+                    name: "USN Journal Parser".to_string(),
+                    description: "Analyses the USN Journal, prints everything in the Journal and allows in depth filtering of the Journal, very good for in depth analysis.".to_string(),
+                    url: "https://github.com/detect-ac/USNJournal/releases/download/forensics/USN.Journal.exe".to_string(),
+                    filename: "USN.Journal.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "Deleted BAM Keys Parser",
-                    description: "Analyses the registry, specifically for BAM (Background Activity Monitor) Key Deletions, and outputs found deleted, keys + if the file exists, its digital signature, and its entropy.",
-                    url: "https://github.com/detect-ac/Deleted-BAM-Scanner/releases/download/forensics/Deleted.BAM.Keys.exe",
-                    filename: "Deleted.BAM.Keys.exe",
+                    name: "Deleted BAM Keys Parser".to_string(),
+                    description: "Analyses the registry, specifically for BAM (Background Activity Monitor) Key Deletions, and outputs found deleted, keys + if the file exists, its digital signature, and its entropy.".to_string(),
+                    url: "https://github.com/detect-ac/Deleted-BAM-Scanner/releases/download/forensics/Deleted.BAM.Keys.exe".to_string(),
+                    filename: "Deleted.BAM.Keys.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "Windows Sqlite Database Parser",
-                    description: "Analyze Windows database files for recent paths, executables, search history and notepad history. This only works on Windows 11 Machines.",
-                    url: "https://github.com/detect-ac/Windows-Sqlite-DB-Parser/releases/download/forensics/Windows.Sqlite.Database.Parser.exe",
-                    filename: "Windows.Sqlite.Database.Parser.exe",
+                    name: "Windows Sqlite Database Parser".to_string(),
+                    description: "Analyze Windows database files for recent paths, executables, search history and notepad history. This only works on Windows 11 Machines.".to_string(),
+                    url: "https://github.com/detect-ac/Windows-Sqlite-DB-Parser/releases/download/forensics/Windows.Sqlite.Database.Parser.exe".to_string(),
+                    filename: "Windows.Sqlite.Database.Parser.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "BAM Parser",
-                    description: "Parse and analyze BAM (Background Activity Moderator) data for timestamps, usn modifications and unsigned/flagged files with yara rules.",
-                    url: "https://github.com/spokwn/BAM-parser/releases/download/v1.2.9/BAMParser.exe",
-                    filename: "BAMParser.exe",
+                    name: "BAM Parser".to_string(),
+                    description: "Parse and analyze BAM (Background Activity Moderator) data for timestamps, usn modifications and unsigned/flagged files with yara rules.".to_string(),
+                    url: "https://github.com/spokwn/BAM-parser/releases/download/v1.2.9/BAMParser.exe".to_string(),
+                    filename: "BAMParser.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "Prefetch Parser",
-                    description: "Analyze Windows Prefetch files for unsigned, flagged files using yara and timestamps for execution.",
-                    url: "https://github.com/spokwn/prefetch-parser/releases/download/v1.5.5/PrefetchParser.exe",
-                    filename: "PrefetchParser.exe",
+                    name: "Prefetch Parser".to_string(),
+                    description: "Analyze Windows Prefetch files for unsigned, flagged files using yara and timestamps for execution.".to_string(),
+                    url: "https://github.com/spokwn/prefetch-parser/releases/download/v1.5.5/PrefetchParser.exe".to_string(),
+                    filename: "PrefetchParser.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "PcaSvc Executed",
-                    description: "Track and analyze Program Compatibility Assistant Service executions and flag unsigned files, and flagged files using yara rules.",
-                    url: "https://github.com/spokwn/pcasvc-executed/releases/download/v0.8.6/PcaSvcExecuted.exe",
-                    filename: "PcaSvcExecuted.exe",
+                    name: "PcaSvc Executed".to_string(),
+                    description: "Track and analyze Program Compatibility Assistant Service executions and flag unsigned files, and flagged files using yara rules.".to_string(),
+                    url: "https://github.com/spokwn/pcasvc-executed/releases/download/v0.8.6/PcaSvcExecuted.exe".to_string(),
+                    filename: "PcaSvcExecuted.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "Process Parser",
-                    description: "Analyze AppInfo and Diagtrack for flagged files with yara rules, all in instance.",
-                    url: "https://github.com/spokwn/process-parser/releases/download/v0.5.5/ProcessParser.exe",
-                    filename: "ProcessParser.exe",
+                    name: "Process Parser".to_string(),
+                    description: "Analyze AppInfo and Diagtrack for flagged files with yara rules, all in instance.".to_string(),
+                    url: "https://github.com/spokwn/process-parser/releases/download/v0.5.5/ProcessParser.exe".to_string(),
+                    filename: "ProcessParser.exe".to_string(),
                     auto_extract: false,
                 },
             ],
         },
         ToolCategory {
-            name: "Forensics & Analysis",
-            icon: "🕵️",
+            name: "Forensics & Analysis".to_string(),
+            icon: "🕵️".to_string(),
             tools: vec![
                 Tool {
-                    name: "WinPrefetchView",
-                    description: "View & analyse Windows Prefetch files (.pf)",
-                    url: "https://www.nirsoft.net/utils/winprefetchview.zip",
-                    filename: "winprefetchview.zip",
+                    name: "WinPrefetchView".to_string(),
+                    description: "View & analyse Windows Prefetch files (.pf)".to_string(),
+                    url: "https://www.nirsoft.net/utils/winprefetchview.zip".to_string(),
+                    filename: "winprefetchview.zip".to_string(),
                     auto_extract: true,
                 },
                 Tool {
-                    name: "System Informer",
-                    description: "Advanced process, memory & network monitor",
-                    url: "https://sourceforge.net/projects/systeminformer/files/systeminformer-3.2.25011-release-setup.exe/download",
-                    filename: "systeminformer-setup.exe",
+                    name: "System Informer".to_string(),
+                    description: "Advanced process, memory & network monitor".to_string(),
+                    url: "https://sourceforge.net/projects/systeminformer/files/systeminformer-3.2.25011-release-setup.exe/download".to_string(),
+                    filename: "systeminformer-setup.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "Autoruns",
-                    description: "Comprehensive autostart entry viewer by Sysinternals",
-                    url: "https://download.sysinternals.com/files/Autoruns.zip",
-                    filename: "Autoruns.zip",
+                    name: "Autoruns".to_string(),
+                    description: "Comprehensive autostart entry viewer by Sysinternals".to_string(),
+                    url: "https://download.sysinternals.com/files/Autoruns.zip".to_string(),
+                    filename: "Autoruns.zip".to_string(),
                     auto_extract: true,
                 },
                 Tool {
-                    name: "Process Monitor",
-                    description: "Real-time file/registry/process/network monitor",
-                    url: "https://download.sysinternals.com/files/ProcessMonitor.zip",
-                    filename: "ProcessMonitor.zip",
+                    name: "Process Monitor".to_string(),
+                    description: "Real-time file/registry/process/network monitor".to_string(),
+                    url: "https://download.sysinternals.com/files/ProcessMonitor.zip".to_string(),
+                    filename: "ProcessMonitor.zip".to_string(),
                     auto_extract: true,
                 },
                 Tool {
-                    name: "Hayabusa 🏍️",
-                    description: "Windows Event Log forensics timeline generator",
-                    url: "https://github.com/Yamato-Security/hayabusa/releases/download/v3.8.1/hayabusa-3.8.1-win-x64.zip",
-                    filename: "hayabusa-3.8.1-win-x64.zip",
+                    name: "Hayabusa 🏍️".to_string(),
+                    description: "Windows Event Log forensics timeline generator".to_string(),
+                    url: "https://github.com/Yamato-Security/hayabusa/releases/download/v3.8.1/hayabusa-3.8.1-win-x64.zip".to_string(),
+                    filename: "hayabusa-3.8.1-win-x64.zip".to_string(),
                     auto_extract: true,
                 },
             ],
         },
         ToolCategory {
-            name: "Network Tools",
-            icon: "🌐",
+            name: "Network Tools".to_string(),
+            icon: "🌐".to_string(),
             tools: vec![
                 Tool {
-                    name: "Wireshark",
-                    description: "Industry-standard packet analyser",
-                    url: "https://1.na.dl.wireshark.org/win64/Wireshark-latest-x64.exe",
-                    filename: "Wireshark-latest-x64.exe",
+                    name: "Wireshark".to_string(),
+                    description: "Industry-standard packet analyser".to_string(),
+                    url: "https://1.na.dl.wireshark.org/win64/Wireshark-latest-x64.exe".to_string(),
+                    filename: "Wireshark-latest-x64.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "TCPView",
-                    description: "Live TCP/UDP endpoint viewer by Sysinternals",
-                    url: "https://download.sysinternals.com/files/TCPView.zip",
-                    filename: "TCPView.zip",
+                    name: "TCPView".to_string(),
+                    description: "Live TCP/UDP endpoint viewer by Sysinternals".to_string(),
+                    url: "https://download.sysinternals.com/files/TCPView.zip".to_string(),
+                    filename: "TCPView.zip".to_string(),
                     auto_extract: true,
                 },
                 Tool {
-                    name: "Nmap",
-                    description: "Network scanner and port mapper",
-                    url: "https://nmap.org/dist/nmap-7.94-setup.exe",
-                    filename: "nmap-setup.exe",
+                    name: "Nmap".to_string(),
+                    description: "Network scanner and port mapper".to_string(),
+                    url: "https://nmap.org/dist/nmap-7.94-setup.exe".to_string(),
+                    filename: "nmap-setup.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "CurrPorts",
-                    description: "Display currently opened TCP/IP & UDP ports",
-                    url: "https://www.nirsoft.net/utils/cports.zip",
-                    filename: "cports.zip",
+                    name: "CurrPorts".to_string(),
+                    description: "Display currently opened TCP/IP & UDP ports".to_string(),
+                    url: "https://www.nirsoft.net/utils/cports.zip".to_string(),
+                    filename: "cports.zip".to_string(),
                     auto_extract: true,
                 },
             ],
         },
         ToolCategory {
-            name: "Disk & File",
-            icon: "💾",
+            name: "Disk & File".to_string(),
+            icon: "💾".to_string(),
             tools: vec![
                 Tool {
-                    name: "WinDirStat",
-                    description: "Disk usage statistics & cleanup helper",
-                    url: "https://github.com/windirstat/windirstat/releases/latest/download/windirstat1_1_2_setup.exe",
-                    filename: "windirstat-setup.exe",
+                    name: "WinDirStat".to_string(),
+                    description: "Disk usage statistics & cleanup helper".to_string(),
+                    url: "https://github.com/windirstat/windirstat/releases/latest/download/windirstat1_1_2_setup.exe".to_string(),
+                    filename: "windirstat-setup.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "Everything",
-                    description: "Instant file search by name across all drives",
-                    url: "https://www.voidtools.com/Everything-1.4.1.1026.x64-Setup.exe",
-                    filename: "Everything-setup.exe",
+                    name: "Everything".to_string(),
+                    description: "Instant file search by name across all drives".to_string(),
+                    url: "https://www.voidtools.com/Everything-1.4.1.1026.x64-Setup.exe".to_string(),
+                    filename: "Everything-setup.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "CrystalDiskInfo",
-                    description: "HDD/SSD S.M.A.R.T. health monitoring",
-                    url: "https://crystalmark.info/redirect.php?product=CrystalDiskInfoInstaller",
-                    filename: "CrystalDiskInfo-setup.exe",
+                    name: "CrystalDiskInfo".to_string(),
+                    description: "HDD/SSD S.M.A.R.T. health monitoring".to_string(),
+                    url: "https://crystalmark.info/redirect.php?product=CrystalDiskInfoInstaller".to_string(),
+                    filename: "CrystalDiskInfo-setup.exe".to_string(),
                     auto_extract: false,
                 },
                 Tool {
-                    name: "FTK Imager",
-                    description: "Forensic disk imaging (Lite, no install required)",
-                    url: "https://ad-zip.s3.amazonaws.com/ftkimager.3.1.1.exe",
-                    filename: "FTKImager.exe",
+                    name: "FTK Imager".to_string(),
+                    description: "Forensic disk imaging (Lite, no install required)".to_string(),
+                    url: "https://ad-zip.s3.amazonaws.com/ftkimager.3.1.1.exe".to_string(),
+                    filename: "FTKImager.exe".to_string(),
                     auto_extract: false,
                 },
             ],
         },
         ToolCategory {
-            name: "Registry & System",
-            icon: "🔧",
+            name: "Registry & System".to_string(),
+            icon: "🔧".to_string(),
             tools: vec![
                 Tool {
-                    name: "RegRipper",
-                    description: "Extract/parse Registry hive data for forensics",
-                    url: "https://github.com/keydet89/RegRipper3.0/archive/refs/heads/master.zip",
-                    filename: "RegRipper3.0.zip",
+                    name: "RegRipper".to_string(),
+                    description: "Extract/parse Registry hive data for forensics".to_string(),
+                    url: "https://github.com/keydet89/RegRipper3.0/archive/refs/heads/master.zip".to_string(),
+                    filename: "RegRipper3.0.zip".to_string(),
                     auto_extract: true,
                 },
                 Tool {
-                    name: "Registry Explorer",
-                    description: "Advanced Registry hive viewer by Eric Zimmermann",
-                    url: "https://f001.backblazeb2.com/file/EricZimmermanTools/net6/RegistryExplorer.zip",
-                    filename: "RegistryExplorer.zip",
+                    name: "Registry Explorer".to_string(),
+                    description: "Advanced Registry hive viewer by Eric Zimmermann".to_string(),
+                    url: "https://f001.backblazeb2.com/file/EricZimmermanTools/net6/RegistryExplorer.zip".to_string(),
+                    filename: "RegistryExplorer.zip".to_string(),
                     auto_extract: true,
                 },
                 Tool {
-                    name: "Sysinternals Suite",
-                    description: "Complete Sysinternals toolset (all tools in one ZIP)",
-                    url: "https://download.sysinternals.com/files/SysinternalsSuite.zip",
-                    filename: "SysinternalsSuite.zip",
+                    name: "Sysinternals Suite".to_string(),
+                    description: "Complete Sysinternals toolset (all tools in one ZIP)".to_string(),
+                    url: "https://download.sysinternals.com/files/SysinternalsSuite.zip".to_string(),
+                    filename: "SysinternalsSuite.zip".to_string(),
                     auto_extract: true,
                 },
             ],
         },
         ToolCategory {
-            name: "Password & Credentials",
-            icon: "🔑",
+            name: "Password & Credentials".to_string(),
+            icon: "🔑".to_string(),
             tools: vec![
                 Tool {
-                    name: "Mimikatz",
-                    description: "Credential extraction utility (research/CTF use)",
-                    url: "https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip",
-                    filename: "mimikatz.zip",
+                    name: "Mimikatz".to_string(),
+                    description: "Credential extraction utility (research/CTF use)".to_string(),
+                    url: "https://github.com/gentilkiwi/mimikatz/releases/latest/download/mimikatz_trunk.zip".to_string(),
+                    filename: "mimikatz.zip".to_string(),
                     auto_extract: true,
                 },
                 Tool {
-                    name: "NirSoft PasswordFox",
-                    description: "Recover Firefox stored passwords",
-                    url: "https://www.nirsoft.net/utils/passwordfox.zip",
-                    filename: "passwordfox.zip",
+                    name: "NirSoft PasswordFox".to_string(),
+                    description: "Recover Firefox stored passwords".to_string(),
+                    url: "https://www.nirsoft.net/utils/passwordfox.zip".to_string(),
+                    filename: "passwordfox.zip".to_string(),
                     auto_extract: true,
                 },
                 Tool {
-                    name: "NirSoft WebBrowserPassView",
-                    description: "Recover passwords from all major browsers",
-                    url: "https://www.nirsoft.net/utils/webbrowserpassview.zip",
-                    filename: "WebBrowserPassView.zip",
+                    name: "NirSoft WebBrowserPassView".to_string().to_string(),
+                    description: "Recover passwords from all major browsers".to_string().to_string(),
+                    url: "https://www.nirsoft.net/utils/webbrowserpassview.zip".to_string().to_string(),
+                    filename: "WebBrowserPassView.zip".to_string().to_string(),
                     auto_extract: true,
                 },
             ],
         },
     ]
-}
-
+    } // end inner catalogue()
+ 
+    catalogue()
+} // end load_catalogue()
+ 
 // ─── App state ────────────────────────────────────────────────────────────────
-
+ 
 #[derive(PartialEq)]
 enum Screen {
     CategoryList,
@@ -348,7 +385,7 @@ enum Screen {
     Downloading,
     Done,
 }
-
+ 
 struct App {
     screen: Screen,
     categories: Vec<ToolCategory>,
@@ -359,21 +396,21 @@ struct App {
     log: Vec<String>,
     anim: Anim,
 }
-
+ 
 impl App {
     fn new() -> Self {
         let mut cat_state = ListState::default();
         cat_state.select(Some(0));
         let mut tool_state = ListState::default();
         tool_state.select(Some(0));
-
+ 
         let output_dir = dirs::download_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("elementary");
-
+ 
         App {
             screen: Screen::CategoryList,
-            categories: catalogue(),
+            categories: load_catalogue(),
             cat_state,
             tool_state,
             selected_tools: HashSet::new(),
@@ -382,11 +419,11 @@ impl App {
             anim: Anim::new(),
         }
     }
-
+ 
     fn current_cat_idx(&self) -> usize { self.cat_state.selected().unwrap_or(0) }
     fn current_tool_idx(&self) -> usize { self.tool_state.selected().unwrap_or(0) }
     fn tool_key(cat: usize, tool: usize) -> String { format!("{cat}:{tool}") }
-
+ 
     fn toggle_tool(&mut self) {
         let cat = self.current_cat_idx();
         let tool = self.current_tool_idx();
@@ -400,7 +437,7 @@ impl App {
         };
         self.anim.set_flash(cat, tool, selected);
     }
-
+ 
     fn select_all_in_category(&mut self) {
         let cat = self.current_cat_idx();
         let keys: Vec<String> = (0..self.categories[cat].tools.len())
@@ -411,7 +448,7 @@ impl App {
             if all_on { self.selected_tools.remove(&k); } else { self.selected_tools.insert(k); }
         }
     }
-
+ 
     fn selected_tool_list(&self) -> Vec<(usize, usize)> {
         let mut out: Vec<(usize, usize)> = self
             .selected_tools
@@ -424,7 +461,7 @@ impl App {
         out.sort();
         out
     }
-
+ 
     fn nav_up_cat(&mut self) {
         let i = self.cat_state.selected().unwrap_or(0);
         self.cat_state.select(Some(i.saturating_sub(1)));
@@ -451,12 +488,12 @@ impl App {
         self.anim.nav_at = Instant::now();
     }
 }
-
+ 
 // ─── UI ───────────────────────────────────────────────────────────────────────
-
+ 
 fn render(f: &mut Frame, app: &App) {
     let area = f.size();
-
+ 
     // Animated title — scrolling shimmer on the header text
     let t = app.anim.t();
     let shimmer_pos = ((t * 8.0) as usize) % 60;
@@ -473,24 +510,24 @@ fn render(f: &mut Frame, app: &App) {
     };
     Span::styled(c.to_string(), style)
 }).collect();
-
+ 
     let border_p = app.anim.pulse(4.0);
 let outer_border = Color::Rgb(
     (10.0 + border_p * 10.0) as u8,  //R
     (50.0 + border_p * 150.0) as u8,  //G
     (10.0 + border_p * 20.0) as u8,   //B
 );
-
+ 
     let outer = Block::default()
         .title(Line::from(title_spans))
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(outer_border));
-
+ 
     let inner = outer.inner(area);
     f.render_widget(outer, area);
-
+ 
     match app.screen {
         Screen::CategoryList => render_category(f, app, inner),
         Screen::ToolList     => render_tools(f, app, inner),
@@ -498,36 +535,36 @@ let outer_border = Color::Rgb(
         _                    => render_log(f, app, inner),
     }
 }
-
+ 
 fn render_category(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(3)])
         .split(area);
-
+ 
     let cursor = app.anim.cursor_symbol();
     let active_border = app.anim.border_color();
     let trail_age = app.anim.nav_trail_age();
     let cur = app.current_cat_idx();
-
+ 
     let items: Vec<ListItem> = app.categories.iter().enumerate().map(|(i, cat)| {
         let sel_count = (0..cat.tools.len())
             .filter(|&t| app.selected_tools.contains(&App::tool_key(i, t)))
             .count();
         let badge = if sel_count > 0 { format!(" [{}✓]", sel_count) } else { String::new() };
-
+ 
         // Nav trail: row just left gets a brief dim highlight
         let is_trail = trail_age < 0.18 && i != cur && (
             (app.anim.nav_dir == 1 && i + 1 == cur) ||
             (app.anim.nav_dir == -1 && i == cur + 1)
         );
-
+ 
         let name_style = if is_trail {
             Style::default().fg(Color::Rgb(140, 180, 220)).add_modifier(Modifier::BOLD)
         } else {
             Style::default().add_modifier(Modifier::BOLD)
         };
-
+ 
         ListItem::new(Line::from(vec![
             Span::raw(format!("  {} ", cat.icon)),
             Span::styled(cat.name, name_style),
@@ -535,7 +572,7 @@ fn render_category(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Span::styled(format!("  ({} tools)", cat.tools.len()), Style::default().fg(Color::DarkGray)),
         ]))
     }).collect();
-
+ 
     let mut state = app.cat_state.clone();
     f.render_stateful_widget(
         List::new(items)
@@ -556,10 +593,10 @@ fn render_category(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         chunks[0],
         &mut state,
     );
-
+ 
     render_help(f, chunks[1], &[("↑↓","navigate"),("Enter","open"),("D","download"),("Q","quit")]);
 }
-
+ 
 fn render_tools(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let cat_idx = app.current_cat_idx();
     let cat = &app.categories[cat_idx];
@@ -567,16 +604,16 @@ fn render_tools(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(3)])
         .split(area);
-
+ 
     let cursor = app.anim.cursor_symbol();
     let active_border = app.anim.border_color();
     let trail_age = app.anim.nav_trail_age();
     let cur = app.current_tool_idx();
-
+ 
     let items: Vec<ListItem> = cat.tools.iter().enumerate().map(|(t, tool)| {
         let key = App::tool_key(cat_idx, t);
         let is_selected = app.selected_tools.contains(&key);
-
+ 
         // Flash animation on toggle
         let (checkbox_span, row_bg) = if let Some(just_selected) = app.anim.flash_active(cat_idx, t) {
             let flash_color = if just_selected {
@@ -592,13 +629,13 @@ fn render_tools(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         } else {
             (Span::styled("  [ ] ", Style::default().fg(Color::DarkGray)), None)
         };
-
+ 
         // Nav trail on tool rows
         let is_trail = trail_age < 0.18 && t != cur && (
             (app.anim.nav_dir == 1 && t + 1 == cur) ||
             (app.anim.nav_dir == -1 && t == cur + 1)
         );
-
+ 
         let name_style = if is_trail {
             Style::default().fg(Color::Rgb(140, 180, 220)).add_modifier(Modifier::BOLD)
         } else if let Some(bg) = row_bg {
@@ -606,13 +643,13 @@ fn render_tools(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         } else {
             Style::default().add_modifier(Modifier::BOLD)
         };
-
+ 
         let ext_tag = if tool.auto_extract {
             Span::styled(" [auto-extract]", Style::default().fg(Color::Rgb(120, 120, 220)))
         } else {
             Span::raw("")
         };
-
+ 
         ListItem::new(vec![
             Line::from(vec![checkbox_span, Span::styled(tool.name, name_style), ext_tag]),
             Line::from(Span::styled(
@@ -621,7 +658,7 @@ fn render_tools(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             )),
         ])
     }).collect();
-
+ 
     let mut state = app.tool_state.clone();
     f.render_stateful_widget(
         List::new(items)
@@ -642,14 +679,14 @@ fn render_tools(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         chunks[0],
         &mut state,
     );
-
+ 
     render_help(f, chunks[1], &[("↑↓","Navigate"),("Space","Toggle"),("A","Toggle (a)ll"),("Esc","Back"),("D","(D)ownload")]);
 }
-
+ 
 fn render_confirm(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let selected = app.selected_tool_list();
     let active_border = app.anim.border_color();
-
+ 
     let mut lines = vec![
         Line::from(Span::styled(
             "The following tools will be downloaded:",
@@ -676,7 +713,7 @@ fn render_confirm(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         "  Enter = confirm   Esc = back",
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     )));
-
+ 
     f.render_widget(
         Paragraph::new(lines)
             .block(
@@ -690,7 +727,7 @@ fn render_confirm(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         area,
     );
 }
-
+ 
 fn render_log(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let title = if app.screen == Screen::Done { " ✓ Complete " } else { " Downloading… " };
     let border_color = if app.screen == Screen::Done {
@@ -698,7 +735,7 @@ fn render_log(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     } else {
         app.anim.border_color()
     };
-
+ 
     let lines: Vec<Line> = app.log.iter().map(|l| {
         let color = if l.contains('✓') { Color::Green }
             else if l.contains('✗') || l.contains("Error") { Color::Red }
@@ -706,7 +743,7 @@ fn render_log(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             else { Color::White };
         Line::from(Span::styled(l.clone(), Style::default().fg(color)))
     }).collect();
-
+ 
     f.render_widget(
         Paragraph::new(lines)
             .block(
@@ -720,7 +757,7 @@ fn render_log(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         area,
     );
 }
-
+ 
 fn render_help(f: &mut Frame, area: ratatui::layout::Rect, keys: &[(&str, &str)]) {
     let mut spans = vec![Span::raw("  ")];
     for (key, desc) in keys {
@@ -744,9 +781,9 @@ fn render_help(f: &mut Frame, area: ratatui::layout::Rect, keys: &[(&str, &str)]
         area,
     );
 }
-
+ 
 // ─── Download + extract ───────────────────────────────────────────────────────
-
+ 
 fn download_file(client: &Client, url: &str, dest: &Path) -> Result<u64> {
     let mut resp = client
         .get(url)
@@ -754,7 +791,7 @@ fn download_file(client: &Client, url: &str, dest: &Path) -> Result<u64> {
         .with_context(|| format!("GET {url}"))?
         .error_for_status()
         .with_context(|| format!("HTTP error for {url}"))?;
-
+ 
     let mut buf = Vec::new();
     let mut tmp = [0u8; 65536];
     loop {
@@ -767,16 +804,16 @@ fn download_file(client: &Client, url: &str, dest: &Path) -> Result<u64> {
     fs::write(dest, &buf).with_context(|| format!("Writing {}", dest.display()))?;
     Ok(buf.len() as u64)
 }
-
+ 
 fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<usize> {
     let stem = zip_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let extract_dir = output_dir.join(&stem);
     fs::create_dir_all(&extract_dir)?;
-
+ 
     let data = fs::read(zip_path)?;
     let mut archive = ZipArchive::new(std::io::Cursor::new(data)).context("Opening ZIP")?;
     let count = archive.len();
-
+ 
     for i in 0..count {
         let mut file = archive.by_index(i)?;
         let outpath = extract_dir.join(file.mangled_name());
@@ -790,27 +827,27 @@ fn extract_zip(zip_path: &Path, output_dir: &Path) -> Result<usize> {
     }
     Ok(count)
 }
-
+ 
 fn run_downloads_plaintext(app: &App) -> Result<()> {
     fs::create_dir_all(&app.output_dir)?;
-
+ 
     let client = Client::builder()
         .timeout(Duration::from_secs(300))
         .user_agent("Elementary/0.1")
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()?;
-
+ 
     let selected = app.selected_tool_list();
     println!("\n  Elementary — {} download(s)\n", selected.len());
     println!("  Output → {}\n", app.output_dir.display());
-
+ 
     for (i, (c, t)) in selected.iter().enumerate() {
         let tool = &app.categories[*c].tools[*t];
         let dest = app.output_dir.join(tool.filename);
-
+ 
         print!("  [{}/{}] {} … ", i + 1, selected.len(), tool.name);
         io::stdout().flush().ok();
-
+ 
         let pb = ProgressBar::new_spinner();
         pb.set_style(
             ProgressStyle::with_template("{spinner:.cyan} {bytes} @ {bytes_per_sec}")
@@ -818,12 +855,12 @@ fn run_downloads_plaintext(app: &App) -> Result<()> {
                 .tick_strings(&["[    ]", "[=   ]", "[==  ]", "[=== ]", "[====]", "[ ===]", "[  ==]", "[   =]"])
         );
         pb.enable_steady_tick(Duration::from_millis(80));
-
+ 
         match download_file(&client, tool.url, &dest) {
             Ok(bytes) => {
                 pb.finish_and_clear();
                 println!("✓  {:.1} MB", bytes as f64 / 1_048_576.0);
-
+ 
                 if tool.auto_extract && dest.extension().map(|e| e.eq_ignore_ascii_case("zip")).unwrap_or(false) {
                     print!("         📦 Extracting {} … ", tool.filename);
                     io::stdout().flush().ok();
@@ -840,42 +877,42 @@ fn run_downloads_plaintext(app: &App) -> Result<()> {
             }
         }
     }
-
+ 
     println!("\n  ✓ All done — {}", app.output_dir.display());
     println!("  Press Enter to exit.");
     let mut s = String::new();
     io::stdin().read_line(&mut s).ok();
     Ok(())
 }
-
+ 
 // ─── Main loop ────────────────────────────────────────────────────────────────
-
+ 
 fn main() -> Result<()> {
     #[cfg(not(target_os = "windows"))]
     eprintln!("Warning: This tool downloads Windows executables.\n");
-
+ 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = App::new();
-
+ 
     
     let frame_duration = Duration::from_millis(16);
-
+ 
     loop {
         terminal.draw(|f| render(f, &app))?;
         app.anim.clear_expired_flash();
-
+ 
         
         if event::poll(frame_duration)? {
             let Event::Key(key) = event::read()? else { continue; };
             if key.kind != crossterm::event::KeyEventKind::Press { continue; }
-
+ 
             if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) { break; }
             if matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q'))
                 && matches!(app.screen, Screen::Done | Screen::CategoryList) { break; }
-
+ 
             match app.screen {
                 Screen::CategoryList => match key.code {
                     KeyCode::Up    => app.nav_up_cat(),
@@ -916,9 +953,10 @@ fn main() -> Result<()> {
             }
         }
     }
-
+ 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
     Ok(())
 }
+ 

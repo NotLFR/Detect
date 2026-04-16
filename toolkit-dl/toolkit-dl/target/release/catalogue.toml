@@ -1,0 +1,99 @@
+# Elementary Catalogue
+# Add or edit tools here without recompiling.
+# Drop this file next to elementary.exe.
+#
+# Each [[category]] has:
+#   name  = display name
+#   icon  = emoji shown in the TUI
+#
+# Each [[category.tools]] entry has:
+#   name         = display name
+#   description  = shown in the detail panel
+#   url          = direct download URL
+#   filename     = filename to save as (e.g. "tool.exe" or "tool.zip")
+#   auto_extract = true if the zip should be extracted after download
+
+[[category]]
+name = "detect.ac Tools"
+icon = "🔍"
+
+  [[category.tools]]
+  name         = "USN Journal Parser"
+  description  = "Analyses the USN Journal, prints everything in the Journal and allows in depth filtering of the Journal, very good for in depth analysis."
+  url          = "https://github.com/detect-ac/USNJournal/releases/download/forensics/USN.Journal.exe"
+  filename     = "USN.Journal.exe"
+  auto_extract = false
+
+  [[category.tools]]
+  name         = "Deleted BAM Keys Parser"
+  description  = "Analyses the registry, specifically for BAM (Background Activity Monitor) Key Deletions, and outputs found deleted, keys + if the file exists, its digital signature, and its entropy."
+  url          = "https://github.com/detect-ac/Deleted-BAM-Scanner/releases/download/forensics/Deleted.BAM.Keys.exe"
+  filename     = "Deleted.BAM.Keys.exe"
+  auto_extract = false
+
+  [[category.tools]]
+  name         = "Windows Sqlite Database Parser"
+  description  = "Analyze Windows database files for recent paths, executables, search history and notepad history. This only works on Windows 11 Machines."
+  url          = "https://github.com/detect-ac/Windows-Sqlite-DB-Parser/releases/download/forensics/Windows.Sqlite.Database.Parser.exe"
+  filename     = "Windows.Sqlite.Database.Parser.exe"
+  auto_extract = false
+
+  [[category.tools]]
+  name         = "BAM Parser"
+  description  = "Parse and analyze BAM (Background Activity Moderator) data for timestamps, usn modifications and unsigned/flagged files with yara rules."
+  url          = "https://github.com/spokwn/BAM-parser/releases/download/v1.2.9/BAMParser.exe"
+  filename     = "BAMParser.exe"
+  auto_extract = false
+
+  [[category.tools]]
+  name         = "Prefetch Parser"
+  description  = "Analyze Windows Prefetch files for unsigned, flagged files using yara and timestamps for execution."
+  url          = "https://github.com/spokwn/prefetch-parser/releases/download/v1.5.5/PrefetchParser.exe"
+  filename     = "PrefetchParser.exe"
+  auto_extract = false
+
+  [[category.tools]]
+  name         = "PcaSvc Executed"
+  description  = "Track and analyze Program Compatibility Assistant Service executions and flag unsigned files, and flagged files using yara rules."
+  url          = "https://github.com/spokwn/pcasvc-executed/releases/download/v0.8.6/PcaSvcExecuted.exe"
+  filename     = "PcaSvcExecuted.exe"
+  auto_extract = false
+
+  [[category.tools]]
+  name         = "Process Parser"
+  description  = "Analyze AppInfo and Diagtrack for flagged files with yara rules, all in instance."
+  url          = "https://github.com/spokwn/process-parser/releases/download/v0.5.5/ProcessParser.exe"
+  filename     = "ProcessParser.exe"
+  auto_extract = false
+
+[[category]]
+name = "Forensics & Analysis"
+icon = "🕵️"
+
+  [[category.tools]]
+  name         = "WinPrefetchView"
+  description  = "View & analyse Windows Prefetch files (.pf)"
+  url          = "https://www.nirsoft.net/utils/winprefetchview.zip"
+  filename     = "winprefetchview.zip"
+  auto_extract = true
+
+  [[category.tools]]
+  name         = "System Informer"
+  description  = "Advanced process, memory & network monitor"
+  url          = "https://sourceforge.net/projects/systeminformer/files/systeminformer-3.2.25011-release-setup.exe/download"
+  filename     = "systeminformer-setup.exe"
+  auto_extract = false
+
+  [[category.tools]]
+  name         = "Autoruns"
+  description  = "Comprehensive autostart entry viewer by Sysinternals"
+  url          = "https://download.sysinternals.com/files/Autoruns.zip"
+  filename     = "Autoruns.zip"
+  auto_extract = true
+
+  [[category.tools]]
+  name         = "Process Monitor"
+  description  = "Real-time file/registry/process/network monitor"
+  url          = "https://download.sysinternals.com/files/ProcessMonitor.zip"
+  filename     = "ProcessMonitor.zip"
+  auto_extract = true
